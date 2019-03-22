@@ -13,6 +13,7 @@
     "express": "^4.16.4",
     "mongodb": "^3.1.13",
     "node-cron": "^2.0.3",
+    "redis": "^2.8.0",
     "themeparks": "^4.7.12"
   }
 }

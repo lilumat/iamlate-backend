@@ -18,6 +18,20 @@ if (result.error) {
 }
 console.log(result.parsed);
 
+// Redis
+var redis = require('redis');
+var clientRedis = redis.createClient();
+
+clientRedis.on('connect', function() {
+    console.log('Redis client connected');
+});
+
+clientRedis.on('error', function (err) {
+    console.log('Something went wrong ' + err);
+});
+
+clientRedis.set('TestKey', 'hello world');
+
 // Conf
 const port = process.env.PORT;
 
@@ -38,6 +52,14 @@ const client = new MongoClient(url, { useNewUrlParser: true });
 
 // Insert snapshots waiting times of rides
 function insertWaitingTime(waitingTime) {
+    client.connect()
+        .then( res => {
+            const db = client.db(dbName);
+            db.collection('waitingTimes').insertOne(waitingTime)
+                .catch(error => console.error(error))
+        })
+        .catch(error => console.error(error));
+
     client.connect(function(err, client) {
         if (err === null) {
             const db = client.db(dbName);
@@ -61,33 +83,35 @@ function wakeUpHerokuApp() {
 
 function getWaitingTimes() {
     console.log('getWaitingTimes');
+
+    // An Error, maybe an issue in ThemeParks ?  
     // Promise
     //     .all([dlpMagicKingdom.GetWaitTimes(), dlpWaltDisneyStudios.GetWaitTimes()])
     //     .then(datas => treatWaitingTimes(datas[0], data[1]))
     //     .catch(error => console.error(error));
 
-    // dlpMagicKingdom.GetWaitTimes().then(function(waitingTimesMK) {
-    //     dlpWaltDisneyStudios.GetWaitTimes().then(function(waitingTimesWDS) {
-    //         treatWaitingTimes(waitingTimesMK, waitingTimesWDS);
-    //     }, console.error);
-    // }, console.error);
-
-
-    // treatWaitingTimes({val: 'testMK'}, {val: 'testWDS'});
+    // for test treatWaitingTimes({val: 'testMK'}, {val: 'testWDS'});
 
     dlpMagicKingdom.GetWaitTimes()
-        .then(data => mk = treatWaitingTimes(data, {}))
+        .then( (dataMK) => {
+            dlpWaltDisneyStudios.GetWaitTimes()
+                .then( dataWDS => treatWaitingTimes(dataMK, dataWDS))
+                .catch (error => console.error(error))
+        })
         .catch(error => console.error(error));
 }
 
 function treatWaitingTimes(waitingTimesMK, waitingTimesWDS) {
     console.log('treatWaitingTimes');
+
+    // build waitingTime
     const waitingTime = {};
-   
-    // add extra properties
     waitingTime.top = (new Date()).getTime(); // timestamp
     waitingTime.mk = waitingTimesMK; // response from Disney
     waitingTime.wds = waitingTimesWDS ; // response from Disney
+
+    // put in cache
+    
     // persist data
     insertWaitingTime(waitingTime);
 
@@ -129,11 +153,13 @@ function stopWakeUpHerokuApp() {
 
 // Boot app
 scheduleWakeUpHerokuApp();
-scheduleGetOpeningTimes();
-scheduleGetWaitingTimes();
+//scheduleGetOpeningTimes();
+//scheduleGetWaitingTimes();
 
 app.get('/', (req, res) => {
-    res.send('ping');
+    clientRedis.get('TestKey', function (error, reply) {
+        res.send(reply);
+    })
 })
 
 app.listen(port, () => console.log(`Example app listening on port ${port}!`))
