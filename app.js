@@ -3,13 +3,15 @@ const cron = require("node-cron");
 const MongoClient = require('mongodb').MongoClient;
 const dotenv = require('dotenv');
 const Themeparks = require("themeparks"); // include the Themeparks library
-
-
+var redis = require('redis');
+const logger = require('heroku-logger')
+ 
 const app = express()
 
 const DELAY_WAKE_UP_HEROKU_APP = 1000 * 60 * 20 ; // delay in milliseconds - 20 minutes
 const DELAY_GET_WAITING_TIMES = 1000 * 10 * 1 // delay in milliseconds to get waiting times
-const MK = 'mk';
+const OPENING_TIMES = 'OPENING_TIMES';
+const LAST_WAITING_TIMES = 'LAST_WAITING_TIMES';
 
 // Load environment variables
 const result = dotenv.config();
@@ -18,21 +20,18 @@ if (result.error) {
 }
 console.log(result.parsed);
 
-// Redis
-var redis = require('redis');
-var clientRedis = redis.createClient();
-
-clientRedis.on('connect', function() {
+// Init cache-manager Redis
+var cacheManager = redis.createClient();
+cacheManager.on('connect', function() {
     console.log('Redis client connected');
 });
-
-clientRedis.on('error', function (err) {
+cacheManager.on('error', function (err) {
     console.log('Something went wrong ' + err);
 });
 
-clientRedis.set('TestKey', 'hello world');
 
-// Conf
+
+// Conf environment
 const port = process.env.PORT;
 
 // Globals
@@ -51,46 +50,24 @@ const dbName = 'iamlate';
 const client = new MongoClient(url, { useNewUrlParser: true });
 
 // Insert snapshots waiting times of rides
-function insertWaitingTime(waitingTime) {
+function insertWaitingTimes(waitingTime) {
     client.connect()
         .then( res => {
             const db = client.db(dbName);
             db.collection('waitingTimes').insertOne(waitingTime)
-                .catch(error => console.error(error))
+                .catch(error => logger.error('insertWaitingTimes >> Error during insert document', {error: error}))
         })
-        .catch(error => console.error(error));
-
-    client.connect(function(err, client) {
-        if (err === null) {
-            const db = client.db(dbName);
-            // Insert a single document
-            db.collection('waitingTimes').insertOne(waitingTime, function(err, r) {
-                if (err !== null) {
-                    console.error("Error during insert document");
-                }
-            });
-        } else {
-            console.error("Error during get connection to server");
-        }
-    });
+        .catch(error => logger.error('insertWaitingTimes >> Error during get connection to server', {error: error}));
 }
 
 
 function wakeUpHerokuApp() {
-    console.log('wakeUpHerokuApp');
+    logger.info('wakeUpHerokuApp');
     // TODO ping localhost
 }
 
 function getWaitingTimes() {
-    console.log('getWaitingTimes');
-
-    // An Error, maybe an issue in ThemeParks ?  
-    // Promise
-    //     .all([dlpMagicKingdom.GetWaitTimes(), dlpWaltDisneyStudios.GetWaitTimes()])
-    //     .then(datas => treatWaitingTimes(datas[0], data[1]))
-    //     .catch(error => console.error(error));
-
-    // for test treatWaitingTimes({val: 'testMK'}, {val: 'testWDS'});
+    logger.info('getWaitingTimes');
 
     dlpMagicKingdom.GetWaitTimes()
         .then( (dataMK) => {
@@ -102,23 +79,28 @@ function getWaitingTimes() {
 }
 
 function treatWaitingTimes(waitingTimesMK, waitingTimesWDS) {
-    console.log('treatWaitingTimes');
+    logger.info('treatWaitingTimes');
 
     // build waitingTime
-    const waitingTime = {};
-    waitingTime.top = (new Date()).getTime(); // timestamp
-    waitingTime.mk = waitingTimesMK; // response from Disney
-    waitingTime.wds = waitingTimesWDS ; // response from Disney
+    const waitingTimes = {};
+    waitingTimes.top = (new Date()).getTime(); // timestamp
+    waitingTimes.mk = waitingTimesMK; // response from Disney
+    waitingTimes.wds = waitingTimesWDS ; // response from Disney
 
     // put in cache
-    
+    cacheManager.set(LAST_WAITING_TIMES, waitingTimes);
+
     // persist data
-    insertWaitingTime(waitingTime);
+    insertWaitingTimes(waitingTimes);
 
 }
 
-function treatOpeningTimes(data) {
-    console.log('treatOpeningTimes')
+function treatOpeningTimes(openingTimes) {
+   logger.info('treatOpeningTimes')
+   // put in cache
+   cacheManager.set(OPENING_TIMES, openingTimes);
+   // persist data
+   insertOpeningTimes(openingTimes);
 }
 
 function fetchOpeningTimes() {
@@ -127,7 +109,7 @@ function fetchOpeningTimes() {
             treatOpeningTimes(data) ;
         })
         .catch( (error) => {
-            console.error(error);
+            logger.error('fetchOpeningTimes server', { error: error })
         })
 }
 
@@ -152,15 +134,17 @@ function stopWakeUpHerokuApp() {
 }
 
 // Boot app
-scheduleWakeUpHerokuApp();
+//scheduleWakeUpHerokuApp();
 //scheduleGetOpeningTimes();
 //scheduleGetWaitingTimes();
 
 app.get('/', (req, res) => {
-    clientRedis.get('TestKey', function (error, reply) {
+    cacheManager.get('TestKey', function (error, reply) {
         res.send(reply);
     })
 })
 
-app.listen(port, () => console.log(`Example app listening on port ${port}!`))
+app.listen(port, () => {
+    logger.info('Starting server', { port: port })
+});
 // getWaitingTimes();
